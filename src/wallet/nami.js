@@ -22,7 +22,7 @@ class Nami {
       accounts = accounts.map(v => wasm.Address.from_bytes(Buffer.from(v, 'hex')).to_bech32());
       return accounts;
     } catch (err) {
-      console.error("%s not installed or not allowed", this.name);
+      console.error("%s not installed or not allowed: %O", this.name, err);
       throw new Error("Not installed or not allowed");
     }
   }
