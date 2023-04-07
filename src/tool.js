@@ -1,5 +1,9 @@
-const wasm = require("@emurgo/cardano-serialization-lib-browser");
+const wasm = require("./lib/@emurgo/cardano-serialization-lib-browser");
 const CoinSelection = require("./coinSelection");
+
+function getWasm() {
+  return wasm;
+}
 
 function bytesAddressToBinary(bytes) {
   return bytes.reduce((str, byte) => str + byte.toString(2).padStart(8, '0'), '');
@@ -70,39 +74,46 @@ function assetsToValue(assets) {
   return value;
 }
 
-function minAdaRequired(value, minUtxo) {
-  return wasm.min_ada_required(
-    value,
-    false,
-    minUtxo
-  ).to_str();
+// Neither min_ada_required nor min_ada_for_output can calculate correct value
+function minAdaRequired(output, coinsPerUtxoByte) {
+  return ((160 + output.to_bytes().byteLength) * coinsPerUtxoByte).toString();
 }
 
 function multiAssetCount(multiAsset) {
   if (!multiAsset) return 0;
   let count = 0;
   const policies = multiAsset.keys();
-  for (let j = 0; j < multiAsset.len(); j++) {
+  for (let j = 0; j < policies.len(); j++) {
     const policy = policies.get(j);
     const policyAssets = multiAsset.get(policy);
     const assetNames = policyAssets.keys();
-    for (let k = 0; k < assetNames.len(); k++) {
-      count++;
-    }
+    count += assetNames.len();
   }
   return count;
 }
 
-async function selectUtxos(utxos, outputs, protocolParameters) {
-  const totalAssets = multiAssetCount(
-    outputs.get(0).amount().multiasset()
-  );
+function getAssetBalance(multiAsset, policyId, name) {
+  if (multiAsset && multiAsset.len()) {
+    let ma = multiAsset.to_js_value();
+    let policy = ma.get(policyId);
+    if (policy) {
+      let value = policy.get(name);
+      return value || "0";
+    }
+  }
+  return "0";
+}
+
+async function selectUtxos(utxos, output, protocolParameters) {
+  const totalAssets = multiAssetCount(output.amount().multiasset());
   CoinSelection.setProtocolParameters(
     protocolParameters.coinsPerUtxoWord,
     protocolParameters.linearFee.minFeeA,
     protocolParameters.linearFee.minFeeB,
     protocolParameters.maxTxSize.toString()
   );
+  const outputs = wasm.TransactionOutputs.new();
+  outputs.add(output); // adapt to CoinSelection api
   const selection = await CoinSelection.randomImprove(
     utxos,
     outputs,
@@ -123,33 +134,22 @@ function genPlutusData() { // just dummy data
 }
 
 function showUtxos(utxos, title = "") {
-  let outs = [];
-  utxos.map(utxo => {
-    let o = utxo.output();
-    let tokens = [];
-    let ma = o.amount().multiasset();
-    if (ma) {
-      let scripts = ma.keys();
-      for (let i = 0; i < scripts.len(); i++) {
-        let script = scripts.get(i);
-        let assets = ma.get(script);
-        let names = assets.keys();
-        for (let j = 0; j < names.len(); j++) {
-          let name = names.get(j);
-          tokens.push({name: name.to_hex(), value: assets.get(name).to_str()})
-        }
-      }
+  utxos.map((utxo, i) => {
+    if (typeof(utxo) === "string") {
+      utxo = wasm.TransactionUnspentOutput.from_hex(utxo);
     }
-    outs.push({to: o.address().to_bech32(), coin: o.amount().coin().to_str(), tokens});
+    let amount = utxo.output().amount();
+    console.debug("%s utxo %d amount: %O", title, i, amount.to_js_value());
   });
-  console.debug("%s utxos output: %O", title, outs);
 }
 
 module.exports = {
+  getWasm,
   validateAddress,
   assetsToValue,
   minAdaRequired,
   multiAssetCount,
+  getAssetBalance,
   selectUtxos,
   genPlutusData,
   showUtxos

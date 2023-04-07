@@ -1,4 +1,5 @@
-const wasm = require("@emurgo/cardano-serialization-lib-browser");
+const wasm = require("../lib/@emurgo/cardano-serialization-lib-browser");
+const tool = require("../tool.js");
 
 class Nami {
   constructor(provider) {
@@ -22,7 +23,7 @@ class Nami {
       accounts = accounts.map(v => wasm.Address.from_bytes(Buffer.from(v, 'hex')).to_bech32());
       return accounts;
     } catch (err) {
-      console.error("%s not installed or not allowed: %O", this.name, err);
+      console.error("%s not installed or not allowed", this.name);
       throw new Error("Not installed or not allowed");
     }
   }
@@ -31,17 +32,10 @@ class Nami {
     let accounts = await this.getAccounts();
     if (addr === accounts[0]) {
       let balance = await this.cardano.getBalance();
-      let value = wasm.Value.from_bytes(Buffer.from(balance, 'hex'));
+      let value = wasm.Value.from_hex(balance);
       if (tokenId) {
-        let multiAsset = value.multiasset();
-        if (multiAsset) {
-          let [policyId, assetName] = tokenId.split(".");
-          // is it api bug that balance has a additional "51" prefix?
-          let amount = multiAsset.get_asset(wasm.ScriptHash.from_hex(policyId), wasm.AssetName.from_hex("51" + assetName));
-          return amount.to_str();
-        } else {
-          return "0";
-        }
+        let [policyId, assetName] = tokenId.split(".");
+        return tool.getAssetBalance(value.multiasset(), policyId, assetName);
       } else { // coin
         return value.coin().to_str(); // TODO: sub token locked coin
       }
@@ -49,21 +43,45 @@ class Nami {
       console.error("%s is not current address", addr);
       throw new Error("Not current address");
     }
-  }  
+  }
 
   async sendTransaction(tx, sender) {
-    let witnessSet = await this.cardano.signTx(Buffer.from(tx.to_bytes(), 'hex').toString('hex'));
-    witnessSet = wasm.TransactionWitnessSet.from_bytes(Buffer.from(witnessSet, "hex"));
+    let witnessSet = await this.cardano.signTx(tx.to_hex());
+    witnessSet = wasm.TransactionWitnessSet.from_hex(witnessSet);
+    let redeemers = tx.witness_set().redeemers();
+    if (redeemers) {
+      witnessSet.set_redeemers(redeemers);
+    }
     let transaction = wasm.Transaction.new(tx.body(), witnessSet, tx.auxiliary_data());
-    let txHash = await this.cardano.submitTx(Buffer.from(transaction.to_bytes(), 'hex').toString('hex'));
+    let txHash = await this.cardano.submitTx(transaction.to_hex());
     return txHash;
   }
 
   // customized function
 
-  async getUtxos() {
+  async getUtxos(tokenId) {
     let utxos = await this.cardano.getUtxos();
-    return utxos.map(utxo => wasm.TransactionUnspentOutput.from_bytes(Buffer.from(utxo, 'hex')));
+    return utxos; // utxos.map(utxo => wasm.TransactionUnspentOutput.from_hex(utxo));
+    // return utxos.filter(v => {
+    //   let utxo = wasm.TransactionUnspentOutput.from_hex(v);
+    //   let multiAsset = utxo.output().amount().multiasset();
+    //   let totalAssets = tool.multiAssetCount(multiAsset);
+    //   if (totalAssets === 0) {
+    //     return true; // all tx need ADA utxo
+    //   }
+    //   if (tokenId) { // token
+    //     let [policyId, assetName] = tokenId.split(".");
+    //     if ((totalAssets === 1) && (tool.getAssetBalance(multiAsset, policyId, assetName) != 0)) {
+    //       return true;
+    //     }
+    //   }
+    //   return false;
+    // })
+  }
+
+  async getCollateral() {
+    let utxos = await this.cardano.getCollateral();
+    return utxos.slice(0, 3); // utxos.map(utxo => wasm.TransactionUnspentOutput.from_hex(utxo));
   }
 }
 
